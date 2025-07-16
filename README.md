@@ -1,101 +1,74 @@
-# Reddit_Comment_AIHawk
+# Reddit Auto Commenter
 
-## Table of Contents
-- [Introduction](#introduction)
-- [Features](#features)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Generating Reddit API Keys](#generating-reddit-api-keys)
-- [Conclusion](#conclusion)
-- [Contributors](#contributors)
-- [License](#license)
-- [Disclaimer](#disclaimer)
-
-## Introduction
-
-The Reddit Comment Generator is a Python script designed to automatically generate and post comments on Reddit. By analyzing trending subreddits and top posts, the script creates engaging comments tailored to maximize interaction and upvotes. It uses OpenAI's GPT models and LangChain to generate content based on specific rules and summaries.
+A Chrome extension that automatically generates and posts AI-powered comments on Reddit using OpenAI's GPT models.
 
 ## Features
 
-- **Automatic Reddit Commenting**: Comments are generated and submitted to trending posts.
-- **Customizable Content Generation**: Utilizes various comment types such as insightful, humorous, question-oriented, and more.
-- **Error Handling**: Robust error management for comment submission failures, rate limits, and subreddit restrictions.
-- **Randomized Comment Intervals**: Avoids detection of automated behavior by introducing random sleep intervals.
+- Generate AI-powered comments for Reddit posts
+- Support for multiple GPT models (GPT-3.5, GPT-4, GPT-4o, etc.)
+- Customizable system prompts and context
+- Optional confirmation before posting
+- Works exclusively with old.reddit.com
 
-## Installation
+## Screenshot
 
-To set up and use the Reddit Comment Generator, follow these steps:
+![Extension Interface](assets/1.png)
 
-1. **Clone the Repository**
+## Quick Start
 
-   ```bash
-   git clone https://github.com/yourusername/reddit-comment-generator.git
-   cd reddit-comment-generator
-   ```
+1. **Install the Extension**
+   - Clone this repository or download the source code
+   - Open Chrome and go to `chrome://extensions/`
+   - Enable "Developer mode" and click "Load unpacked"
+   - Select the folder containing the extension files
 
-2. **Create a Virtual Environment (optional but recommended)**
+2. **Get OpenAI API Key**
+   - Visit [platform.openai.com](https://platform.openai.com)
+   - Create an account and generate an API key
+   - Add credits to your OpenAI account
 
-   ```bash
-   python -m venv venv
-   source venv/bin/activate   # On Windows use `venv\Scripts\activate`
-   ```
+3. **Configure Extension**
+   - Click the extension icon in Chrome
+   - Enter your OpenAI API key (starts with "sk-")
+   - Choose your preferred GPT model
+   - Click "Save Settings"
 
-3. **Install Dependencies**
+4. **Start Commenting**
+   - Go to [old.reddit.com](https://old.reddit.com) and open any post
+   - Click the extension icon and hit "Comment!"
+   - Review and post your AI-generated comment
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Configuration Options
 
-## Configuration
+- **OpenAI API Key**: Your authentication key for OpenAI services
+- **GPT Model**: Choose between different AI models (3.5-turbo recommended for cost)
+- **Custom Content**: Add specific instructions to personalize comments
+- **Additional Context**: Provide extra information about posts
+- **Require Confirmation**: Review comments before posting (recommended)
 
-Ensure you have the following configuration files in place:
+## Troubleshooting
 
-### `config_secrets.py`
+**Extension Not Loading**
+- Ensure Developer Mode is enabled in Chrome extensions
+- Check that all files are in the same folder
 
-This file contains your sensitive credentials and API keys. It should be placed in the same directory as your main script. Make sure to replace the placeholder values with your actual credentials.
+**Comments Not Generating** 
+- Verify your API key is correct and has credits
+- Make sure you're on old.reddit.com (not www.reddit.com)
+- Ensure you're viewing a specific post
 
-```python
-CLIENT_ID = 'YOUR_REDDIT_CLIENT_ID'
-CLIENT_SECRET = 'YOUR_REDDIT_CLIENT_SECRET'
-USERNAME = 'YOUR_REDDIT_USERNAME'
-PASSWORD = 'YOUR_REDDIT_PASSWORD'
-OPENAI_KEY = 'YOUR_OPENAI_API_KEY'
-```
+## Documentation
 
-- **Explanation**:
-  - `CLIENT_ID`: Your Reddit application's client ID.
-  - `CLIENT_SECRET`: Your Reddit application's client secret.
-  - `USERNAME`: Your Reddit username.
-  - `PASSWORD`: Your Reddit account password.
-  - `OPENAI_KEY`: Your OpenAI API key.
-
-**Important**: Ensure this file is kept private and not shared or committed to version control to protect your sensitive information.
-
-## Usage
-
-To use the Reddit Comment Generator, execute the script `main.py`. Ensure that the configuration files are correctly set up before running the script.
-
-```bash
-python main.py
-```
-
-## Conclusion
-
-The Reddit Comment Generator is a powerful tool for automating Reddit comment creation. By leveraging AI-driven content generation and automation, users can engage with trending topics and generate comments that maximize interaction.
-
-## Contributors
-
-- [feder-cr](https://github.com/feder-cr) - Creator and Lead Developer
+For detailed setup instructions, field explanations, and technical documentation, see [TECHNICAL.md](TECHNICAL.md).
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
-## Disclaimer
+## Development
 
-The use of this script for commenting on Reddit is subject to Reddit’s API terms of service. The script is provided "as-is" without any warranties or guarantees. For educational and demonstrative purposes only, this script is intended to showcase how Reddit automation might work and is not recommended for real-world use.
-
-Using this script for actual Reddit commenting could lead to account suspension or other penalties if it violates Reddit's guidelines or terms of service. Always use automation responsibly and ensure compliance with Reddit's rules and policies.
-
-We strongly discourage the use of this script for real-world applications and advise against deploying it for any production or large-scale commenting activities.
+To modify the extension:
+1. Make changes to the source files
+2. Go to `chrome://extensions/`
+3. Click refresh on the extension
+4. Test your changes
