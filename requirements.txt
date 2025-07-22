@@ -1,4 +1,0 @@
-openai
-langchain
-langchain_openai
-praw
