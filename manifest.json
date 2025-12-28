@@ -1,17 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Reddit Auto Commenter",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "minimum_chrome_version": "102",
   "description": "Automatically generate and post comments on old.reddit.com using OpenAI",
-  "permissions": [
-    "activeTab",
-    "storage",
-    "scripting"
-  ],
-  "host_permissions": [
-    "https://old.reddit.com/*",
-    "https://api.openai.com/*"
-  ],
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": ["https://old.reddit.com/*", "https://api.openai.com/*"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Generate Reddit Comment"

@@ -1,86 +1,177 @@
-function extractPostData() {
-  const titleElement = document.querySelector('a.title');
-  const bodyElement = document.querySelector('div.entry div.usertext-body');
-  
-  if (!titleElement) {
-    alert('Error: Post title not found. Please make sure you are on a Reddit post page.');
-    return { error: 'Post title not found' };
+(() => {
+  'use strict';
+
+  // Recovery injection can race with the manifest's automatic injection.
+  // One listener per document prevents a single message from submitting twice.
+  if (globalThis.__redditCommenterLoaded) return;
+  globalThis.__redditCommenterLoaded = true;
+  let submitting = false;
+
+  function visible(element) {
+    return Boolean(element && element.getClientRects().length);
   }
-  
-  const title = titleElement.textContent.trim();
-  const body = bodyElement ? bodyElement.textContent.trim() : '';
-  
-  return { title, body };
-}
 
-function insertComment(comment) {
-  const textArea = document.querySelector('div.usertext-edit textarea');
-  
-  if (!textArea) {
-    return { error: 'Comment textarea not found' };
+  function page(expectedId) {
+    const match = location.pathname.match(
+      /^\/r\/[^/]+\/comments\/([a-z0-9]+)(?:\/|$)/i
+    );
+    if (
+      location.protocol !== 'https:' ||
+      location.hostname !== 'old.reddit.com' ||
+      !match ||
+      't3_' + match[1].toLowerCase() !== expectedId
+    ) {
+      throw new Error('The page is no longer the selected Reddit post.');
+    }
+    const post = document.querySelector(
+      '.thing.link[data-fullname="' + expectedId + '"]'
+    );
+    const area = document.querySelector('.commentarea');
+    const user = document.querySelector('#header-bottom-right .user a');
+    if (!post || !area)
+      throw new Error('The post or comment area is unavailable.');
+    if (!user) throw new Error('Log into Reddit before generating a comment.');
+
+    // A top-level form must belong to this post, not to a nested reply or edit.
+    const form = [...area.querySelectorAll('form.usertext')].find(
+      (candidate) =>
+        !candidate.closest('.thing.comment') &&
+        candidate.querySelector('input[name="thing_id"]')?.value === expectedId
+    );
+    const textarea = form?.querySelector('textarea[name="text"]');
+    const button = form?.querySelector('button[type="submit"]');
+    if (
+      !visible(textarea) ||
+      textarea.disabled ||
+      !visible(button) ||
+      button.disabled
+    ) {
+      throw new Error(
+        'Commenting is unavailable. The post may be locked, archived, or restricted.'
+      );
+    }
+    return {
+      post,
+      area,
+      form,
+      textarea,
+      button,
+      username: user.textContent.trim()
+    };
   }
-  
-  textArea.value = comment;
-  textArea.dispatchEvent(new Event('input', { bubbles: true }));
-  
-  return { success: true };
-}
 
-function submitComment() {
-  const submitButton = document.querySelector('div.usertext-buttons button[type="submit"]');
-  
-  if (!submitButton) {
-    return { error: 'Submit button not found' };
+  function extract(expectedId) {
+    const { post, textarea } = page(expectedId);
+    if (textarea.value.trim())
+      throw new Error(
+        'Your Reddit comment box contains a draft. Save or clear it first.'
+      );
+    const title = post.querySelector('a.title')?.textContent.trim();
+    if (!title) throw new Error('Post title not found.');
+    // Link posts have no selftext. Never use the first comment as their body.
+    const body =
+      post.querySelector('.expando .usertext-body')?.textContent.trim() || '';
+    return { title, body };
   }
-  
-  submitButton.click();
-  
-  setTimeout(() => {
-    // Refresh the current post to show the new comment
-    window.location.reload();
-  }, 1500);
-  
-  return { success: true };
-}
 
-function generateLoremIpsum() {
-  const loremTexts = [
-    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
-    "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
-    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.",
-    "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.",
-    "Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium."
-  ];
-  
-  return loremTexts[Math.floor(Math.random() * loremTexts.length)];
-}
-
-function insertLoremComment() {
-  const comment = generateLoremIpsum();
-  return insertComment(comment);
-}
-
-// Debug: Log that content script has loaded
-console.log('Reddit Auto Commenter: Content script loaded on', window.location.href);
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('Reddit Auto Commenter: Received message', request.action);
-  
-  if (request.action === 'ping') {
-    sendResponse({ success: true, message: 'Content script is loaded' });
-  } else if (request.action === 'extractPost') {
-    const postData = extractPostData();
-    sendResponse(postData);
-  } else if (request.action === 'insertComment') {
-    const result = insertComment(request.comment);
-    sendResponse(result);
-  } else if (request.action === 'insertLoremComment') {
-    const result = insertLoremComment();
-    sendResponse(result);
-  } else if (request.action === 'submitComment') {
-    const result = submitComment();
-    sendResponse(result);
+  async function submit(expectedId, comment) {
+    if (submitting) throw new Error('A submission is already in progress.');
+    if (
+      typeof comment !== 'string' ||
+      !comment.trim() ||
+      comment.length > 10000
+    ) {
+      throw new Error('Enter a comment between 1 and 10,000 characters.');
+    }
+    const { area, form, textarea, button, username } = page(expectedId);
+    if (textarea.value.trim())
+      throw new Error(
+        'Your existing Reddit draft was preserved. Save or clear it first.'
+      );
+    const before = new Set(
+      [...area.querySelectorAll('.thing.comment')].map(
+        (node) => node.dataset.fullname
+      )
+    );
+    submitting = true;
+    try {
+      return await new Promise((resolve, reject) => {
+        let finished = false;
+        const finish = (error, value) => {
+          if (finished) return;
+          finished = true;
+          observer.disconnect();
+          clearTimeout(timer);
+          error ? reject(error) : resolve(value);
+        };
+        const inspect = () => {
+          const error = [...form.querySelectorAll('.error')].find(
+            (node) => visible(node) && node.textContent.trim()
+          );
+          if (error)
+            return finish(
+              new Error(
+                'Reddit rejected the comment: ' + error.textContent.trim()
+              )
+            );
+          // A click is not success. Require a new comment by this user AND the
+          // submitted form clearing, which Reddit does after a successful reply.
+          const added = [...area.querySelectorAll('.thing.comment')].find(
+            (node) =>
+              node.dataset.fullname &&
+              !before.has(node.dataset.fullname) &&
+              node.querySelector('.entry .author')?.textContent.trim() ===
+                username &&
+              !node.parentElement?.closest('.thing.comment')
+          );
+          if (added && !textarea.value.trim())
+            finish(null, { commentId: added.dataset.fullname });
+        };
+        const observer = new MutationObserver(inspect);
+        const timer = setTimeout(
+          () =>
+            finish(
+              new Error(
+                'Submission was not confirmed within 20 seconds. Check Reddit before retrying.'
+              )
+            ),
+          20000
+        );
+        observer.observe(area, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          characterData: true
+        });
+        textarea.value = comment;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        try {
+          button.click();
+          inspect();
+        } catch (error) {
+          finish(error);
+        }
+      });
+    } finally {
+      submitting = false;
+    }
   }
-  
-  return true;
-});
+
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (
+      sender.id !== chrome.runtime.id ||
+      !['ping', 'extract', 'submit'].includes(request?.action)
+    )
+      return false;
+    Promise.resolve()
+      .then(() => {
+        if (request.action === 'ping') return {};
+        if (request.action === 'extract') return extract(request.postId);
+        return submit(request.postId, request.comment);
+      })
+      .then((result) => sendResponse({ success: true, ...result }))
+      .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  });
+})();

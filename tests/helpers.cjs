@@ -29,6 +29,13 @@ function storage(initial = {}) {
 
 function sandbox(files, overrides = {}) {
   const chrome = {
+    tabs: {
+      onRemoved: {
+        addListener(listener) {
+          this.listener = listener;
+        }
+      }
+    },
     storage: { local: storage(), sync: storage(), session: storage() },
     runtime: {
       id: 'test',

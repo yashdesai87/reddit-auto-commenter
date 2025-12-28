@@ -1,0 +1,21 @@
+{
+  "name": "reddit-auto-commenter",
+  "version": "1.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "check": "node --check background.js && node --check content.js && node --check popup.js && node --check lib/settings.js && node --check lib/generator.js",
+    "test:ui": "node tests/popup-browser.cjs",
+    "test:extension": "node tests/extension-browser.cjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "playwright": "^1.63.0",
+    "prettier": "^3.9.6"
+  }
+}
