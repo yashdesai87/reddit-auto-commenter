@@ -1,227 +1,240 @@
+'use strict';
+
 document.addEventListener('DOMContentLoaded', async () => {
-  const apiKeyInput = document.getElementById('apiKey');
-  const gptModelSelect = document.getElementById('gptModel');
-  const contextInput = document.getElementById('context');
-  const postContextInput = document.getElementById('postContext');
-  const requireConfirmationInput = document.getElementById('requireConfirmation');
-  const saveBtn = document.getElementById('saveBtn');
-  const commentBtn = document.getElementById('commentBtn');
-  const status = document.getElementById('status');
-  
-  const result = await chrome.storage.sync.get(['openaiApiKey', 'gptModel', 'commentContext', 'postContext', 'requireConfirmation']);
-  if (result.openaiApiKey) {
-    apiKeyInput.value = result.openaiApiKey;
-  }
-  if (result.gptModel) {
-    gptModelSelect.value = result.gptModel;
-  }
-  if (result.commentContext) {
-    contextInput.value = result.commentContext;
-  }
-  if (result.postContext) {
-    postContextInput.value = result.postContext;
-  }
-  if (result.requireConfirmation) {
-    requireConfirmationInput.checked = result.requireConfirmation;
-  }
-  
-  function showStatus(message, type) {
+  const byId = (id) => document.getElementById(id);
+  let tabId;
+  let busy = false;
+  let phase = 'idle';
+  let renderedDraft;
+  let ready = false;
+  let hasLocalEdits = false;
+  let stateRevision = 0;
+
+  function showStatus(message, type = 'info') {
+    const status = byId('status');
     status.textContent = message;
-    status.className = `status ${type}`;
-    status.style.display = 'block';
-    
-    // Clear any existing timeout
-    if (showStatus.timeoutId) {
-      clearTimeout(showStatus.timeoutId);
-    }
-    
-    // Only auto-hide success messages, keep error messages for 20 seconds
-    const timeout = type === 'error' ? 20000 : (type === 'success' ? 10000 : 20000);
-    
-    showStatus.timeoutId = setTimeout(() => {
-      status.style.display = 'none';
-    }, timeout);
+    status.className = 'status ' + type;
   }
-  
-  async function ensureContentScriptLoaded(tabId) {
+
+  async function request(action, values = {}) {
+    const result = await chrome.runtime.sendMessage({
+      action,
+      tabId,
+      ...values
+    });
+    if (!result?.success)
+      throw new Error(
+        result?.error ||
+          'The extension did not respond. Reopen the popup and try again.'
+      );
+    return result;
+  }
+
+  function updateControls() {
+    const running = busy || ['generating', 'posting'].includes(phase);
+    byId('settingsFields').disabled = running || !ready;
+    byId('saveBtn').disabled = running || !ready;
+    byId('commentBtn').disabled =
+      running || !ready || ['posted', 'uncertain'].includes(phase);
+    byId('postBtn').disabled =
+      running || !ready || phase !== 'draft' || !byId('draft').value.trim();
+    byId('clearBtn').disabled = running || !ready;
+    byId('draft').disabled = running || phase !== 'draft';
+    byId('commentBtn').textContent =
+      phase === 'generating' ? 'Generating…' : 'Generate comment';
+    byId('postBtn').textContent =
+      phase === 'posting' ? 'Posting…' : 'Post comment';
+    byId('status').setAttribute('aria-busy', String(running));
+  }
+
+  function updateCount() {
+    byId('draftCount').textContent =
+      byId('draft').value.length.toLocaleString() + ' / 10,000';
+    updateControls();
+  }
+
+  function render(state) {
+    phase = state.phase;
+    byId('review').hidden = !state.comment;
+    byId('draftTitle').textContent = state.title || 'Generated comment';
+    // Storage progress events must not replace edits made in the open popup.
+    if (state.comment && state.comment !== renderedDraft && !hasLocalEdits) {
+      byId('draft').value = state.comment;
+      renderedDraft = state.comment;
+    }
+    const labels = {
+      idle: 'Open a post on old.reddit.com to get started.',
+      generating:
+        'Generating your draft. You can reopen this popup to check progress.',
+      draft: 'Review and edit the draft, then click Post comment.',
+      posting: 'Waiting for Reddit to confirm submission…',
+      posted: 'Reddit displayed your new comment.',
+      uncertain:
+        'Submission status is uncertain. Check Reddit before trying again.',
+      error: 'Generation failed.'
+    };
+    showStatus(
+      state.error || labels[phase] || 'Unknown operation state.',
+      ['uncertain', 'error'].includes(phase)
+        ? 'error'
+        : phase === 'posted'
+          ? 'success'
+          : 'info'
+    );
+    updateCount();
+  }
+
+  async function save() {
+    return request('save', {
+      apiKey: byId('apiKey').value.trim(),
+      settings: {
+        gptModel: byId('gptModel').value,
+        commentContext: byId('context').value.trim(),
+        postContext: byId('postContext').value.trim(),
+        requireConfirmation: byId('requireConfirmation').checked
+      }
+    });
+  }
+
+  async function run(work) {
+    if (busy || !ready) return;
+    busy = true;
+    updateControls();
     try {
-      // Try to inject the content script if it's not already loaded
-      await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        files: ['content.js']
-      });
+      await work();
     } catch (error) {
-      // Content script might already be loaded, which is fine
-      console.log('Content script injection attempted:', error.message);
+      showStatus(error.message, 'error');
+    } finally {
+      busy = false;
+      updateControls();
     }
   }
 
-  async function checkContentScriptLoaded(tabId) {
-    try {
-      const response = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
-      return response.success;
-    } catch (error) {
-      return false;
-    }
-  }
+  byId('showKey').addEventListener('click', () => {
+    const show = byId('apiKey').type === 'password';
+    byId('apiKey').type = show ? 'text' : 'password';
+    byId('showKey').textContent = show ? 'Hide' : 'Show';
+    byId('showKey').setAttribute('aria-pressed', String(show));
+  });
+  byId('draft').addEventListener('input', () => {
+    hasLocalEdits = true;
+    updateCount();
+    // Save edits independently of workflow state. An in-flight generation or
+    // progress notification must not overwrite the user's current text.
+    chrome.storage.session
+      .set({
+        ['edit:' + tabId]: {
+          original: renderedDraft,
+          text: byId('draft').value
+        }
+      })
+      .catch(() =>
+        showStatus(
+          'Could not save your edits. Copy the draft before closing.',
+          'error'
+        )
+      );
+  });
 
-  async function sendMessageToTab(tabId, message, retries = 3) {
-    // First check if content script is loaded
-    const isLoaded = await checkContentScriptLoaded(tabId);
-    if (!isLoaded) {
-      console.log('Content script not loaded, attempting injection...');
-      await ensureContentScriptLoaded(tabId);
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Wait for injection
+  try {
+    updateControls();
+    showStatus('Loading settings…');
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true
+    });
+    if (!tab || !Number.isInteger(tab.id))
+      throw new Error('No active tab is available.');
+    tabId = tab.id;
+    const { settings, openaiApiKey } = await request('settings');
+    byId('apiKey').value = openaiApiKey || '';
+    byId('gptModel').value = settings.gptModel;
+    if (!byId('gptModel').value) byId('gptModel').value = 'gpt-4o-mini';
+    byId('context').value = settings.commentContext;
+    byId('postContext').value = settings.postContext;
+    byId('requireConfirmation').checked = settings.requireConfirmation;
+
+    // Subscribe before the first state read so generation finishing while the
+    // popup opens does not leave the UI stuck on an old progress snapshot.
+    chrome.storage.onChanged.addListener((changes, area) => {
+      const state = changes['job:' + tabId]?.newValue;
+      if (area === 'session' && state) {
+        stateRevision++;
+        render(state);
+      }
+    });
+    const revisionAtRead = stateRevision;
+    const initialState = (await request('state')).state;
+    if (stateRevision === revisionAtRead) render(initialState);
+    const edit = (await chrome.storage.session.get('edit:' + tabId))[
+      'edit:' + tabId
+    ];
+    if (phase === 'draft' && edit?.original === renderedDraft) {
+      byId('draft').value = edit.text;
+      hasLocalEdits = true;
+      updateCount();
     }
-    
-    for (let i = 0; i < retries; i++) {
-      try {
-        const response = await chrome.tabs.sendMessage(tabId, message);
-        return response;
-      } catch (error) {
-        if (error.message.includes('Could not establish connection') || error.message.includes('Receiving end does not exist')) {
-          if (i === retries - 1) {
-            throw new Error('Unable to connect to the page. The content script may not be compatible with this page. Please try refreshing the page or check if you are on a Reddit post page.');
-          }
-          // Wait a bit before retrying
-          await new Promise(resolve => setTimeout(resolve, 800));
-        } else {
+
+    byId('saveBtn').addEventListener('click', () =>
+      run(async () => {
+        await save();
+        showStatus(
+          'Settings saved. The API key is kept for this browser session only.',
+          'success'
+        );
+      })
+    );
+    byId('commentBtn').addEventListener('click', () =>
+      run(async () => {
+        await save();
+        if (
+          phase === 'draft' &&
+          !confirm('Replace the current draft with a newly generated comment?')
+        )
+          return;
+        hasLocalEdits = false;
+        renderedDraft = undefined;
+        await chrome.storage.session.remove('edit:' + tabId);
+        render({ phase: 'generating' });
+        try {
+          render((await request('generate')).state);
+        } catch (error) {
+          render((await request('state')).state);
           throw error;
         }
-      }
-    }
-  }
-  
-  saveBtn.addEventListener('click', async () => {
-    const apiKey = apiKeyInput.value.trim();
-    const gptModel = gptModelSelect.value;
-    const context = contextInput.value.trim();
-    const postContext = postContextInput.value.trim();
-    const requireConfirmation = requireConfirmationInput.checked;
-    
-    if (!apiKey) {
-      showStatus('Please enter an API key', 'error');
-      return;
-    }
-    
-    if (!apiKey.startsWith('sk-')) {
-      showStatus('Invalid API key format', 'error');
-      return;
-    }
-    
-    try {
-      await chrome.storage.sync.set({ 
-        openaiApiKey: apiKey,
-        gptModel: gptModel,
-        commentContext: context,
-        postContext: postContext,
-        requireConfirmation: requireConfirmation
-      });
-      showStatus('Settings saved successfully!', 'success');
-    } catch (error) {
-      showStatus('Failed to save settings', 'error');
-    }
-  });
-  
-  commentBtn.addEventListener('click', async () => {
-    const apiKey = apiKeyInput.value.trim();
-    const gptModel = gptModelSelect.value;
-    const context = contextInput.value.trim();
-    const postContext = postContextInput.value.trim();
-    const requireConfirmation = requireConfirmationInput.checked;
-    
-    if (!apiKey) {
-      showStatus('Please enter an API key first', 'error');
-      return;
-    }
-    
-    if (!apiKey.startsWith('sk-')) {
-      showStatus('Invalid API key format', 'error');
-      return;
-    }
-    
-    try {
-      commentBtn.disabled = true;
-      commentBtn.textContent = 'Working...';
-      
-      await chrome.storage.sync.set({ 
-        openaiApiKey: apiKey,
-        gptModel: gptModel,
-        commentContext: context,
-        postContext: postContext,
-        requireConfirmation: requireConfirmation
-      });
-      
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      
-      if (!tab.url.includes('old.reddit.com')) {
-        showStatus('Please navigate to old.reddit.com first', 'error');
-        return;
-      }
-      
-      showStatus('Extracting post data...', 'info');
-      
-      const extractResponse = await sendMessageToTab(tab.id, { action: 'extractPost' });
-      
-      if (extractResponse.error) {
-        showStatus(extractResponse.error, 'error');
-        return;
-      }
-      
-      showStatus('Generating AI comment...', 'info');
-      
-      const result = await chrome.storage.sync.get(['openaiApiKey', 'gptModel', 'commentContext', 'postContext']);
-      
-      const generateResponse = await chrome.runtime.sendMessage({
-        action: 'generateOnly',
-        title: extractResponse.title,
-        body: extractResponse.body,
-        apiKey: result.openaiApiKey,
-        model: result.gptModel || 'gpt-3.5-turbo',
-        context: result.commentContext,
-        postContext: result.postContext
-      });
-      
-      if (!generateResponse.success) {
-        showStatus(generateResponse.error || 'Failed to generate comment', 'error');
-        return;
-      }
-      
-      if (requireConfirmation) {
-        const confirmPost = confirm(`Generated comment:\n\n${generateResponse.comment}\n\nDo you want to post this comment?`);
-        if (!confirmPost) {
-          showStatus('Comment posting cancelled by user', 'info');
+      })
+    );
+    byId('postBtn').addEventListener('click', () =>
+      run(async () => {
+        hasLocalEdits = false;
+        render(
+          (await request('submit', { comment: byId('draft').value })).state
+        );
+      })
+    );
+    byId('clearBtn').addEventListener('click', () =>
+      run(async () => {
+        if (
+          ['uncertain', 'posted'].includes(phase) &&
+          !confirm(
+            'Have you checked Reddit for the previous comment? Clearing this status allows another submission.'
+          )
+        )
           return;
-        }
-      }
-      
-      showStatus('Posting comment...', 'info');
-      
-      const insertResponse = await sendMessageToTab(tab.id, { 
-        action: 'insertComment', 
-        comment: generateResponse.comment 
-      });
-      
-      if (insertResponse.error) {
-        showStatus(insertResponse.error, 'error');
-        return;
-      }
-      
-      const submitResponse = await sendMessageToTab(tab.id, { action: 'submitComment' });
-      
-      if (submitResponse.error) {
-        showStatus(submitResponse.error, 'error');
-        return;
-      }
-      
-      showStatus('Comment posted successfully!', 'success');
-      setTimeout(() => window.close(), 1000);
-      
-    } catch (error) {
-      showStatus(`Error: ${error.message || 'Failed to generate comment'}`, 'error');
-    } finally {
-      commentBtn.disabled = false;
-      commentBtn.textContent = 'Comment!';
-    }
-  });
+        if (phase === 'draft' && !confirm('Discard this generated draft?'))
+          return;
+        renderedDraft = undefined;
+        hasLocalEdits = false;
+        await chrome.storage.session.remove('edit:' + tabId);
+        byId('draft').value = '';
+        render((await request('clear')).state);
+      })
+    );
+    ready = true;
+    updateControls();
+  } catch (error) {
+    ready = false;
+    showStatus('Unable to initialize: ' + error.message, 'error');
+    updateControls();
+  }
 });
