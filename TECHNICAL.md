@@ -1,592 +1,175 @@
-# Technical Documentation
+# Technical guide
 
-This document provides detailed technical information about the Reddit Auto Commenter Chrome extension, including comprehensive setup instructions, field explanations, code architecture, and data flow.
+## Layout
 
-## Table of Contents
+| File                      | Responsibility                                                               |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `manifest.json`           | Manifest V3 permissions, popup, content script, and worker                   |
+| `background.js`           | Trusted popup requests, per-tab job locks, state transitions, page messaging |
+| `lib/settings.js`         | Settings validation, session credentials, migration from legacy sync storage |
+| `lib/generator.js`        | Prompt construction, bounded API requests, response validation               |
+| `content.js`              | Post-scoped extraction, draft protection, submission and DOM confirmation    |
+| `popup.html`, `popup.css` | Accessible popup structure and visual presentation                           |
+| `popup.js`                | Settings UI, editable draft, progress/error display, session edit recovery   |
+| `tests/`                  | Regression tests and Chromium browser checks                                 |
 
-- [Detailed Installation Guide](#detailed-installation-guide)
-- [OpenAI API Key Setup](#openai-api-key-setup)
-- [Configuration Fields Explained](#configuration-fields-explained)
-- [Code Structure and Architecture](#code-structure-and-architecture)
-- [Data Flow Architecture](#data-flow-architecture)
-- [Security Features](#security-features)
-- [Advanced Troubleshooting](#advanced-troubleshooting)
+Production has no third-party JavaScript dependencies or build step.
+Development dependencies are locked in `package-lock.json`.
 
-## Detailed Installation Guide
+## Workflow and ownership
 
-### Prerequisites
-- Google Chrome browser (latest version recommended)
-- OpenAI API key with sufficient credits
-- Basic understanding of Chrome extensions
+The worker owns generation and posting. The popup is a view/controller; closing it
+does not discard a generated response or stop an already-started operation.
 
-### Step-by-Step Installation
-
-1. **Download the Extension**
-   - Clone this repository: `git clone https://github.com/yashdesai87/reddit-ai-comment-chrome-extension.git`
-   - Or download as ZIP and extract to a folder on your computer
-
-2. **Open Chrome Extensions Management**
-   - Open Google Chrome
-   - Navigate to `chrome://extensions/`
-   - Alternative: Menu → More Tools → Extensions
-
-3. **Enable Developer Mode**
-   - Toggle the "Developer mode" switch in the top-right corner
-   - This enables loading unpacked extensions
-
-4. **Load the Extension**
-   - Click the "Load unpacked" button
-   - Navigate to and select the folder containing `manifest.json`
-   - The extension should appear in your extensions list with a generated ID
-
-5. **Verify Installation**
-   - Check that the extension appears in `chrome://extensions/`
-   - Ensure it's enabled (toggle switch is on)
-   - Look for the extension icon in the Chrome toolbar
-
-6. **Pin Extension (Recommended)**
-   - Click the puzzle piece icon in Chrome toolbar
-   - Find "Reddit Auto Commenter" 
-   - Click the pin icon to keep it permanently visible
-
-## OpenAI API Key Setup
-
-### Creating an OpenAI Account
-
-1. **Sign Up Process**
-   - Visit [platform.openai.com](https://platform.openai.com)
-   - Click "Sign up" if you're new, or "Log in" for existing users
-   - Complete registration with email verification
-   - Provide phone number for account verification (required)
-
-2. **Account Verification**
-   - Verify your email address via the confirmation link
-   - Complete phone number verification via SMS
-   - Accept OpenAI's terms of service and usage policies
-
-### API Key Generation
-
-1. **Access API Dashboard**
-   - Log into your OpenAI account
-   - Click your profile icon (top-right corner)
-   - Select "View API keys" from dropdown
-   - Direct link: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
-
-2. **Create New Secret Key**
-   - Click "Create new secret key" button
-   - Provide a descriptive name (e.g., "Reddit Commenter Extension")
-   - Optionally set permissions and expiration
-   - Click "Create secret key"
-
-3. **Secure Key Storage**
-   - **Critical**: Copy the key immediately after creation
-   - Store in a secure location (password manager recommended)
-   - The key will not be visible again after closing the dialog
-   - Key format: `sk-proj-...` or `sk-...` followed by alphanumeric characters
-
-### Billing and Credits Setup
-
-1. **Add Payment Method**
-   - Navigate to [platform.openai.com/account/billing](https://platform.openai.com/account/billing)
-   - Click "Add payment method"
-   - Enter credit card or PayPal information
-   - Verify payment method
-
-2. **Purchase Credits**
-   - Choose a credit amount (minimum $5 recommended)
-   - Complete purchase transaction
-   - Credits appear in your account balance
-
-3. **Set Usage Limits (Optional)**
-   - Configure monthly spending limits
-   - Set up usage notifications
-   - Monitor consumption in the billing dashboard
-
-### API Key Security Best Practices
-
-- **Never share API keys** with others or post publicly
-- **Don't commit keys** to version control systems
-- **Use unique keys** for different applications
-- **Regularly rotate keys** (monthly/quarterly)
-- **Monitor usage** for unusual activity
-- **Revoke compromised keys** immediately from OpenAI dashboard
-- **Store securely** using password managers or secure vaults
-
-## Configuration Fields Explained
-
-### 1. OpenAI API Key Field
-
-**Purpose**: Authentication credential for OpenAI API access
-- **Format**: Must begin with `sk-` followed by project identifier and secret
-- **Storage**: Encrypted in Chrome's synchronized storage
-- **Validation**: Extension verifies format before saving
-- **Security**: Never transmitted except to OpenAI's servers via HTTPS
-- **Example Format**: `sk-proj-abc123def456...`
-
-**Error Handling**:
-- Invalid format warning if doesn't start with `sk-`
-- Connection errors if key is revoked or invalid
-- Billing errors if insufficient credits
-
-### 2. GPT Model Selection
-
-**Purpose**: Determines which OpenAI model processes comment generation
-
-**Available Models**:
-
-- **`gpt-3.5-turbo`**
-  - Cost: ~$0.002/1K tokens
-  - Speed: Fast (1-3 seconds)
-  - Quality: Good for basic comments
-  - Best for: High-volume usage, simple responses
-
-- **`gpt-4`**
-  - Cost: ~$0.03/1K tokens (15x more expensive)
-  - Speed: Moderate (3-8 seconds)
-  - Quality: Superior reasoning and context understanding
-  - Best for: Complex discussions, nuanced responses
-
-- **`gpt-4o-mini`**
-  - Cost: ~$0.00015/1K tokens
-  - Speed: Very fast (1-2 seconds)
-  - Quality: Optimized balance of speed and capability
-  - Best for: Most use cases, recommended default
-
-- **`gpt-4o`**
-  - Cost: ~$0.005/1K tokens
-  - Speed: Fast (2-4 seconds)
-  - Quality: Latest capabilities, multimodal support
-  - Best for: Advanced reasoning, creative responses
-
-- **`gpt-4-turbo`**
-  - Cost: ~$0.01/1K tokens
-  - Speed: Fast (2-5 seconds)
-  - Quality: Extended context window (128K tokens)
-  - Best for: Long posts, complex context understanding
-
-**Recommendation**: Start with `gpt-4o-mini` for optimal cost/performance balance.
-
-### 3. Built-in System Prompt (Read-Only)
-
-**Content**: 
-```
-You are a helpful Reddit commenter. Generate thoughtful, engaging comments that add value to the discussion. Keep comments conversational and authentic. Avoid being overly formal or promotional.
+```text
+idle → generating → draft → posting → posted
+          ↓                     ↓
+        error                uncertain
 ```
 
-**Purpose**: Establishes base behavior and tone for AI responses
-- **Immutable**: Cannot be edited by users
-- **Enhanced**: Combined with custom context fields
-- **Guidelines**: Promotes helpful, authentic Reddit interaction style
+With explicit automatic mode, the worker advances from draft to posting without
+waiting for review. The default requires a separate Post comment action.
 
-### 4. Custom Content Field (Optional)
+Jobs are scoped to a tab ID and bound to a Reddit post ID. A tab may have only one
+active operation. Both the worker and the content script verify the destination
+before posting. Navigating to a different post invalidates the existing draft.
 
-**Purpose**: Personalizes AI behavior with specific instructions
+State lives in session storage at `job:<tabId>`. Popup edits are saved separately at
+`edit:<tabId>` with the original generated text, so progress updates cannot replace
+the text being edited. Browser restart or extension reload clears session data.
 
-**Effective Examples**:
-- `"Be supportive and encouraging, especially for people sharing struggles"`
-- `"Ask thoughtful follow-up questions to continue discussions"`
-- `"Share relevant technical knowledge when appropriate"`
-- `"Use a casual, friendly tone with occasional humor"`
-- `"Focus on providing helpful resources and links"`
+An interrupted generation becomes an error when the popup reconnects. An
+interrupted submission becomes uncertain. The extension does not replay it:
+a lost response might mean Reddit accepted the comment.
 
-**Implementation**: Appended to system prompt as: `Additional context: [your content]`
+## Reddit interaction
 
-**Best Practices**:
-- Keep instructions concise but specific
-- Focus on tone and approach rather than content
-- Test different styles to find what works for your use case
-- Avoid contradicting the base system prompt
+The content script accepts only known messages from this extension. Repeated
+injection is guarded so one document has one listener.
 
-### 5. Additional Post Context Field (Optional)
+Extraction requires:
 
-**Purpose**: Provides extra information about posts not visible in title/body
+- An HTTPS old Reddit URL with an individual post route.
+- The post element with the matching `data-fullname`.
+- A logged-in user indicator.
+- An available top-level comment form whose hidden `thing_id` matches the post.
+- An empty, visible, enabled textarea and an available submit button.
 
-**Use Cases**:
-- **Technical Context**: `"This relates to React 18's concurrent features"`
-- **Ongoing Discussions**: `"This is part of an ongoing debate about crypto regulation"`
-- **Industry Knowledge**: `"This company recently announced layoffs affecting this team"`
-- **Acronym Clarification**: `"API means Application Programming Interface in this context"`
-- **Cultural References**: `"This references a popular meme from last week"`
+Title and selftext are extracted within the selected post. Link posts without
+selftext yield an empty body; the first comment is never substituted.
 
-**Implementation**: Added to user prompt as: `Additional Post Context: [your context]`
+Submission revalidates the page and form. It fills only the post's top-level form,
+dispatches input/change events, and clicks its submit button once. A mutation
+observer waits for a new top-level comment by the logged-in user and for the form
+to clear. Visible Reddit form errors are returned to the popup.
 
-**Tips**:
-- Provide objective, factual context
-- Explain specialized terms or concepts
-- Give background on current events or trends
-- Clarify ambiguous references
+There is no forced reload and no success message based solely on clicking Submit.
+If confirmation cannot be established within 20 seconds, the state is uncertain.
+Check the page before clearing the status to allow another attempt.
 
-### 6. Require Confirmation Checkbox
+This relies on Reddit's DOM conventions, not a server-side posting receipt.
+A markup change or simultaneous manual action can affect confirmation. Treat an
+uncertain result as potentially submitted.
 
-**Purpose**: Enables review of generated comments before posting
+## Generation
 
-**When Enabled**:
-- Shows comment in browser popup/alert
-- User can approve or cancel posting
-- Allows manual review for appropriateness
-- Provides learning opportunity to improve prompts
+The generator uses Chat Completions with the configured model, a 500-token output
+limit, and a temperature of 0.7. The model picker is a configured list, not a live
+catalog or a guarantee of access.
 
-**Benefits**:
-- **Quality Control**: Catch inappropriate or off-topic responses
-- **Learning Tool**: Understand how different prompts affect output
-- **Safety Net**: Prevent posting in sensitive discussions
-- **Customization**: Fine-tune prompts based on output quality
+Post material is serialized separately from system instructions. The prompt asks
+the model to treat it as untrusted material and avoid inventing personal
+experiences. This is a prompt-level mitigation, not a guarantee of factual or
+safe output; user review remains important.
 
-**Recommendation**: Enable when starting out, disable once comfortable with outputs
+Validation rejects:
 
-## Code Structure and Architecture
+- Missing or oversized post data.
+- Missing, null, non-text, empty, or oversized output.
+- Refusals and responses that did not finish normally, including truncation.
+- Invalid JSON and non-successful HTTP responses.
 
-### File Structure Overview
+The request has a 25-second abort deadline, including response parsing. Status
+codes produce actionable errors without echoing provider response bodies.
+There is no automatic API retry. Markdown, paragraph breaks, and Unicode
+punctuation are preserved.
 
-```
-reddit-commenter/
-├── manifest.json      # Extension configuration and permissions
-├── popup.html         # User interface (HTML/CSS)
-├── popup.js          # Frontend logic and user interactions  
-├── content.js        # Reddit DOM manipulation
-├── background.js     # OpenAI API integration
-├── README.md         # Basic documentation
-├── TECHNICAL.md      # This detailed documentation
-└── LICENSE           # MIT license
-```
+## Storage and trust
 
-### Component Architecture
+Preferences use local storage. Credentials use session storage and are exposed
+only to trusted extension contexts. The popup masks the key by default and
+supports clearing it explicitly.
 
-#### 1. `manifest.json` - Extension Configuration
+Migration reads legacy sync settings, preserves newer local preferences, moves a
+legacy key into session memory if needed, and removes the old synchronized
+values only after successful writes. Initialization failure blocks UI actions
+and presents an error.
 
-**Purpose**: Defines extension metadata, permissions, and entry points
+The worker accepts commands only from the packaged `popup.html` URL with this
+extension's ID. It does not accept content-script requests to retrieve credentials
+or invoke the API. Page messages target frame zero. Recovery injection is used
+when the page does not respond to a ping; posting itself is never retried.
 
-**Key Sections**:
-```json
-{
-  "manifest_version": 3,           // Latest Chrome extension API
-  "name": "Reddit Auto Commenter", // Extension display name
-  "version": "1.0.0",             // Version number
-  "permissions": [                 // Required permissions
-    "activeTab",                  // Access current tab
-    "storage",                    // Save settings locally
-    "scripting"                   // Inject content scripts
-  ],
-  "host_permissions": [            // Domain access
-    "https://old.reddit.com/*",   // Reddit interaction
-    "https://api.openai.com/*"    // OpenAI API calls
-  ],
-  "content_scripts": [...],       // Auto-inject into Reddit
-  "action": {...},                // Popup configuration
-  "background": {...}             // Service worker setup
-}
-```
+Storage APIs are not a password vault. Session storage reduces persistence and
+unnecessary syncing; it does not protect against a compromised browser or device.
+Chrome documents the storage scopes and access controls in its
+[storage reference](https://developer.chrome.com/docs/extensions/reference/api/storage).
 
-**Security Considerations**:
-- Minimal required permissions
-- Specific domain restrictions
-- No broad web access
+## Popup behavior
 
-#### 2. `popup.html` - User Interface
+- Settings remain disabled until initialization succeeds.
+- Progress disables conflicting actions and announces status through an ARIA live region.
+- Review mode is enabled by default; an explicit saved false value is respected.
+- Generated text is editable before posting, with a character count.
+- Draft edits are saved in session storage and restored when reopening the popup.
+- Error and success messages remain visible instead of disappearing on a timer.
+- Unknown submission outcomes block another generation until status is explicitly cleared.
+- Clearing an existing draft or submission status asks for confirmation.
+- Inputs have labels, visible keyboard focus, bounded lengths, and predictable disabled states.
+- The popup scrolls vertically and avoids horizontal overflow at its 400-pixel width.
 
-**Purpose**: Creates the visual interface for extension popup
+Chrome closes a toolbar popup when focus moves away. The worker-owned workflow
+accounts for this behavior. See Chrome's
+[popup guide](https://developer.chrome.com/docs/extensions/develop/ui/add-popup).
 
-**Structure**:
-- **Form Fields**: API key input, model selector, text areas
-- **Styling**: Embedded CSS for consistent, professional appearance
-- **Responsive Design**: Optimized for Chrome's popup constraints (400x600px)
-- **Status Display**: Dynamic message area for user feedback
+## Verification
 
-**CSS Highlights**:
-- Clean, modern design following Chrome extension guidelines
-- Accessible color contrast and font sizes
-- Hover states and visual feedback for interactions
-- Error/success state styling for status messages
+`npm test` runs unit and DOM regression tests for settings migration, generation
+validation, timing failures, duplicate prevention, post binding, and form selection.
 
-#### 3. `popup.js` - Frontend Logic (`popup.js:1-227`)
+`npm run test:ui` loads the real popup assets in Chromium with simulated Chrome APIs.
+It checks initialization, validation recovery, key visibility, editing/reopening,
+submission states, clearing, persisted preferences, keyboard focus, and overflow.
 
-**Purpose**: Handles user interactions and coordinates extension components
+`npm run test:extension` loads the unpacked extension in an isolated Chromium
+profile. It uses actual Chrome storage, runtime messaging, worker execution, and
+content scripts against a simulated Reddit page. Only API generation and the
+test-tab selection are substituted. It closes the popup during generation,
+reopens it, edits the result, and verifies exactly one submission.
 
-**Key Functions**:
+To update the screenshot intentionally:
 
-- **`DOMContentLoaded` Event Handler**: 
-  - Loads saved settings from Chrome storage
-  - Populates form fields with previous values
-  - Initializes event listeners
-
-- **`showStatus(message, type)` (`popup.js:28-44`)**:
-  - Displays feedback messages to users
-  - Supports success, error, and info message types
-  - Auto-hides success messages, keeps errors visible longer
-  - Manages timeout clearing for message updates
-
-- **`ensureContentScriptLoaded(tabId)` (`popup.js:46-57`)**:
-  - Dynamically injects content script if not already present
-  - Handles race conditions and injection failures gracefully
-  - Critical for reliable communication with Reddit pages
-
-- **`sendMessageToTab(tabId, message, retries)` (`popup.js:68-93`)**:
-  - Robust message passing with automatic retry logic
-  - Handles connection failures and timing issues
-  - Provides clear error messages for troubleshooting
-
-- **Save Button Handler (`popup.js:95-124`)**:
-  - Validates API key format (must start with "sk-")
-  - Saves all settings to Chrome's synchronized storage
-  - Provides immediate feedback on save success/failure
-
-- **Comment Button Handler (`popup.js:126-226`)**:
-  - Orchestrates entire comment generation workflow
-  - Validates inputs and current page context
-  - Handles optional user confirmation step
-  - Manages button states during processing
-  - Provides detailed progress updates
-
-#### 4. `content.js` - Reddit Page Interaction (`content.js:1-96`)
-
-**Purpose**: Directly manipulates Reddit's DOM elements and extracts data
-
-**Key Functions**:
-
-- **`extractPostData()` (`content.js:1-14`)**:
-  - Uses CSS selectors to find Reddit post elements:
-    - Title: `a.title` selector
-    - Body: `div.entry div.usertext-body` selector
-  - Returns structured data object or error messages
-  - Handles missing elements gracefully
-
-- **`insertComment(comment)` (`content.js:16-27`)**:
-  - Locates Reddit's comment textarea: `div.usertext-edit textarea`
-  - Inserts generated comment text
-  - Triggers input events to notify Reddit's JavaScript
-  - Returns success/error status
-
-- **`submitComment()` (`content.js:29-44`)**:
-  - Finds submit button: `div.usertext-buttons button[type="submit"]`
-  - Programmatically clicks to submit comment
-  - Refreshes the current post page to show the new comment
-  - Keeps user on the same post they were commenting on
-
-- **`generateLoremIpsum()` (`content.js:46-61`)**:
-  - Debug utility for testing without API calls
-  - Provides placeholder text for development
-  - Can be used for testing DOM manipulation
-
-- **Message Listener (`content.js:66-86`)**:
-  - Handles communication from popup script
-  - Responds to ping requests for connectivity testing
-  - Processes extract, insert, and submit commands
-  - Returns structured responses for error handling
-
-#### 5. `background.js` - AI Integration (`background.js:1-140`)
-
-**Purpose**: Manages OpenAI API communication and comment generation
-
-**Key Functions**:
-
-- **`generateComment()` (`background.js:1-58`)**:
-  - **Prompt Construction**:
-    - Combines base system prompt with custom context
-    - Builds user prompt with title, body, and additional context
-    - Structures prompts for optimal AI performance
-  
-  - **API Communication**:
-    - Makes HTTPS POST requests to OpenAI's Chat Completions endpoint
-    - Uses proper authentication headers
-    - Handles rate limiting and error responses
-  
-  - **Configuration Parameters**:
-    - `max_tokens: 200`: Limits response length for Reddit appropriateness
-    - `temperature: 0.7`: Balances creativity with consistency
-    - `model`: User-selected from available options
-  
-  - **Error Handling**:
-    - Parses API error responses
-    - Provides meaningful error messages
-    - Handles network failures and timeouts
-
-- **`cleanComment(comment)` (`background.js:60-72`)**:
-  - Removes problematic Unicode characters:
-    - Em dashes (—), En dashes (–), Minus signs (−)
-    - Figure dashes, Non-breaking hyphens
-    - Two-em and Three-em dashes
-  - Normalizes whitespace (multiple spaces to single)
-  - Ensures Reddit compatibility and readability
-
-- **`processComment(tabId)` (`background.js:93-126`)**:
-  - Executes complete automated workflow:
-    1. Extract post data from Reddit page
-    2. Generate comment using OpenAI API
-    3. Insert comment into Reddit form
-    4. Submit comment automatically
-  - Used for direct comment generation without confirmation
-  - Returns detailed success/error information
-
-- **Message Handlers (`background.js:128-138`)**:
-  - `generateComment`: Full automated process
-  - `generateOnly`: Generate comment for user review
-  - Supports asynchronous operations with proper Promise handling
-
-## Data Flow Architecture
-
-### 1. User Configuration Phase
-```
-User Input → popup.html → popup.js → Chrome Storage API → Local Storage
+```bash
+UPDATE_SCREENSHOT=1 npm run test:ui
 ```
 
-**Process**:
-1. User enters API key and settings in popup
-2. popup.js validates input format
-3. Settings saved to Chrome's encrypted sync storage
-4. Settings persist across browser sessions and devices
+Browser profiles used by these tests are temporary. No real Reddit login, public
+submission, or paid OpenAI request is used.
 
-### 2. Comment Generation Workflow
-```
-User Click → popup.js → content.js → background.js → OpenAI API
-     ↓                      ↓             ↓           ↓
-Status Update ← popup.js ← content.js ← background.js ← API Response
-```
+## Manual verification before a release
 
-**Detailed Process**:
-1. **Initiation**: User clicks "Comment!" button in popup
-2. **Validation**: popup.js verifies settings and current page
-3. **Extraction**: content.js extracts post title and body from Reddit DOM
-4. **Generation**: background.js sends post data to OpenAI API
-5. **Processing**: API returns generated comment
-6. **Insertion**: content.js inserts comment into Reddit's textarea
-7. **Submission**: content.js triggers Reddit's submit button
-8. **Completion**: User receives success confirmation
+Use your own account and a post where you have permission to comment:
 
-### 3. Message Passing Architecture
-```
-popup.js ←→ content.js (via chrome.tabs.sendMessage)
-popup.js ←→ background.js (via chrome.runtime.sendMessage)
-```
+1. Load the extension and verify its popup at normal and enlarged browser zoom.
+2. Check a selftext post, a link post, a comment permalink, and a post with collapsed content.
+3. Verify logged-out, locked, archived, and restricted-post handling.
+4. Try generation with a valid key, rejected key, unavailable model, and exhausted quota.
+5. Close/reopen the popup during generation; verify the draft and edits survive.
+6. Navigate the original tab to another post before approving; verify submission is blocked.
+7. Put text in Reddit's form before generation and before approval; verify it is preserved.
+8. Submit one reviewed comment and inspect the actual result on Reddit.
+9. Test a Reddit rate-limit rejection and slow/lost network response; verify there is no automatic resubmission.
+10. Restart Chrome and verify preferences remain while the API key and drafts clear.
 
-**Communication Patterns**:
-- **Popup ↔ Content**: DOM manipulation commands and data extraction
-- **Popup ↔ Background**: API calls and comment generation
-- **Error Handling**: Each layer provides meaningful error messages
-- **Retry Logic**: Automatic retries for failed connections
-
-### 4. Storage Architecture
-```
-User Settings → Chrome Storage API → Encrypted Local Storage
-     ↓                                        ↓
-Multiple Devices ← Chrome Sync ← Cloud Storage
-```
-
-**Storage Features**:
-- **Encrypted**: API keys stored securely
-- **Synchronized**: Settings sync across Chrome instances
-- **Persistent**: Survives browser restarts and updates
-
-## Security Features
-
-### API Key Protection
-- **Encrypted Storage**: Chrome's storage API encrypts sensitive data
-- **Local Only**: Keys never transmitted except to OpenAI
-- **HTTPS Required**: All API communications use secure protocols
-- **No Logging**: Extension doesn't log or cache API keys
-
-### Input Validation
-- **API Key Format**: Validates "sk-" prefix before saving
-- **URL Verification**: Confirms user is on old.reddit.com
-- **DOM Safety**: Sanitizes extracted content before API calls
-- **Error Sanitization**: Removes sensitive data from error messages
-
-### Content Script Isolation
-- **Sandbox Execution**: Runs in isolated context from Reddit's scripts
-- **Limited Permissions**: Only accesses required DOM elements
-- **No Global Variables**: Prevents conflicts with Reddit's JavaScript
-- **CSP Compliance**: Follows Content Security Policy guidelines
-
-### Network Security
-- **HTTPS Only**: All external communications encrypted
-- **Certificate Validation**: Verifies OpenAI's SSL certificates
-- **No Third-Party Requests**: Only communicates with OpenAI and Reddit
-- **Timeout Protection**: Prevents hanging requests
-
-### Domain Restrictions
-- **Host Permissions**: Limited to old.reddit.com and api.openai.com
-- **Origin Validation**: Verifies requests come from allowed domains
-- **No Broad Access**: Cannot access other websites or tabs
-- **Explicit Permissions**: Users see exactly what extension accesses
-
-## Advanced Troubleshooting
-
-### Extension Loading Issues
-
-**Symptom**: Extension doesn't appear in chrome://extensions/
-- **Solution**: Ensure Developer Mode is enabled
-- **Check**: All files (especially manifest.json) are in the same folder
-- **Verify**: Folder permissions allow Chrome to read files
-
-**Symptom**: "Invalid manifest" error
-- **Check**: manifest.json syntax is valid JSON
-- **Verify**: All required fields are present
-- **Update**: Chrome browser to latest version
-
-### API Connection Problems
-
-**Symptom**: "Failed to generate comment" with network error
-- **Check**: Internet connection is stable
-- **Verify**: OpenAI API status at [status.openai.com](https://status.openai.com)
-- **Test**: API key works in OpenAI playground
-
-**Symptom**: "Invalid API key format" 
-- **Verify**: Key starts with "sk-" (not "Bearer sk-")
-- **Check**: No extra spaces or characters
-- **Confirm**: Key was copied completely
-
-**Symptom**: "Insufficient credits" error
-- **Check**: OpenAI account billing page
-- **Add**: More credits to account
-- **Monitor**: Usage doesn't exceed monthly limits
-
-### Reddit Integration Issues
-
-**Symptom**: "Post title not found" error
-- **Verify**: You're on a specific Reddit post (not main feed)
-- **Check**: Using old.reddit.com (not www.reddit.com)
-- **Refresh**: Page and try again
-
-**Symptom**: Comment generates but doesn't post
-- **Check**: You're logged into Reddit
-- **Verify**: Not rate-limited by Reddit
-- **Confirm**: Subreddit allows comments
-
-### Performance Issues
-
-**Symptom**: Extension runs slowly
-- **Solution**: Switch to faster model (gpt-3.5-turbo)
-- **Check**: Other Chrome extensions aren't interfering
-- **Monitor**: System resources and network speed
-
-**Symptom**: Chrome becomes unresponsive
-- **Disable**: Extension temporarily
-- **Check**: Chrome memory usage
-- **Update**: Chrome to latest version
-
-### Data Synchronization Issues
-
-**Symptom**: Settings don't save across devices
-- **Check**: Chrome sync is enabled in browser settings
-- **Verify**: Same Google account signed into Chrome
-- **Test**: Other Chrome sync features work properly
-
-**Symptom**: Settings reset after browser restart
-- **Check**: Chrome isn't in incognito/private mode
-- **Verify**: Extension has storage permission
-- **Clear**: Chrome's extension data and reconfigure
-
-### Debug Mode
-
-**Enable Console Logging**:
-1. Open Chrome DevTools (F12)
-2. Check Console tab for extension messages
-3. Look for "Reddit Auto Commenter:" prefixed logs
-4. Note any JavaScript errors or warnings
-
-**Inspect Extension**:
-1. Go to chrome://extensions/
-2. Click "Details" on Reddit Auto Commenter
-3. Click "Inspect views: popup" or "background page"
-4. Use DevTools to debug issues
-
-For additional support, check the main README.md troubleshooting section or create an issue in the project repository.
+Automated fixtures cannot establish compatibility with every live subreddit,
+account restriction, DOM variant, browser version, or future API response.

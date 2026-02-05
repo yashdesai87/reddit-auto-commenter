@@ -1,74 +1,76 @@
 # Reddit Auto Commenter
 
-A Chrome extension that automatically generates and posts AI-powered comments on Reddit using OpenAI's GPT models.
+A Chrome extension for drafting and posting comments on individual posts at
+`https://old.reddit.com`. It sends the post's title, visible selftext, and your
+optional context to OpenAI.
 
-## Features
+Review before posting is enabled by default. Generated drafts and edits survive
+closing the popup during the same browser session.
 
-- Generate AI-powered comments for Reddit posts
-- Support for multiple GPT models (GPT-3.5, GPT-4, GPT-4o, etc.)
-- Customizable system prompts and context
-- Optional confirmation before posting
-- Works exclusively with old.reddit.com
+## Install
 
-## Screenshot
+1. Download or clone this repository.
+2. Open `chrome://extensions`, enable **Developer mode**, and select **Load unpacked**.
+3. Select the repository folder containing `manifest.json`.
+4. Open an individual post on old Reddit and log into Reddit.
+5. Open the extension, enter an OpenAI API key, and save your settings.
 
-![Extension Interface](assets/1.png)
+The extension requires Chrome 102 or newer. Development and browser tests use
+Node.js 24 and the Chromium version installed by Playwright.
 
-## Quick Start
+## Use
 
-1. **Install the Extension**
-   - Clone this repository or download the source code
-   - Open Chrome and go to `chrome://extensions/`
-   - Enable "Developer mode" and click "Load unpacked"
-   - Select the folder containing the extension files
+1. Choose a model available to your API account.
+2. Optionally expand **Customize the reply** to add writing preferences or context.
+3. Click **Generate comment**.
+4. Review and edit the draft, then click **Post comment**.
+5. Wait for confirmation that Reddit displayed your new comment.
 
-2. **Get OpenAI API Key**
-   - Visit [platform.openai.com](https://platform.openai.com)
-   - Create an account and generate an API key
-   - Add credits to your OpenAI account
+Unchecking **Review before posting** enables automatic submission after generation.
+The extension preserves existing text in Reddit's comment box; save or clear that
+text yourself before using the extension.
 
-3. **Configure Extension**
-   - Click the extension icon in Chrome
-   - Enter your OpenAI API key (starts with "sk-")
-   - Choose your preferred GPT model
-   - Click "Save Settings"
+![Extension popup with draft preview](assets/1.png)
 
-4. **Start Commenting**
-   - Go to [old.reddit.com](https://old.reddit.com) and open any post
-   - Click the extension icon and hit "Comment!"
-   - Review and post your AI-generated comment
+## Privacy and storage
 
-## Configuration Options
+- API keys are held in Chrome session storage, not synchronized storage.
+- Re-enter the key after restarting the browser or reloading/disabling the extension.
+- To forget the key immediately, clear its field and click **Save settings**.
+- Preferences persist locally on this device. Drafts and edits last for the browser session.
+- Older synchronized settings are migrated locally, and the old synchronized key is removed after migration succeeds.
+- Post text and your context are sent to OpenAI when you generate. Comments are sent to Reddit when you approve posting or enable automatic submission.
 
-- **OpenAI API Key**: Your authentication key for OpenAI services
-- **GPT Model**: Choose between different AI models (3.5-turbo recommended for cost)
-- **Custom Content**: Add specific instructions to personalize comments
-- **Additional Context**: Provide extra information about posts
-- **Require Confirmation**: Review comments before posting (recommended)
+## Limits and recovery
 
-## Troubleshooting
-
-**Extension Not Loading**
-- Ensure Developer Mode is enabled in Chrome extensions
-- Check that all files are in the same folder
-
-**Comments Not Generating** 
-- Verify your API key is correct and has credits
-- Make sure you're on old.reddit.com (not www.reddit.com)
-- Ensure you're viewing a specific post
-
-## Documentation
-
-For detailed setup instructions, field explanations, and technical documentation, see [TECHNICAL.md](TECHNICAL.md).
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details.
+- Only individual old Reddit post pages are supported; feeds and other Reddit frontends are rejected.
+- Linked articles, image contents, videos, and comment threads are not fetched or analyzed.
+- Context fields allow 4,000 characters each; post text allows 30,000 characters.
+- Drafts allow 10,000 characters. Incomplete or empty model responses are rejected.
+- Generation times out after 25 seconds. Submission confirmation times out after 20 seconds.
+- Reddit rejection, a lost connection, or uncertain confirmation requires checking the page before another attempt. The extension never automatically retries submission.
+- Locked, archived, restricted, or logged-out pages may not offer a usable comment form.
+- Model availability, Reddit markup, account restrictions, and actual network behavior can change.
 
 ## Development
 
-To modify the extension:
-1. Make changes to the source files
-2. Go to `chrome://extensions/`
-3. Click refresh on the extension
-4. Test your changes
+```bash
+npm ci
+npm run check
+npm test
+npx playwright install chromium
+npm run test:ui
+npm run test:extension
+npm run format:check
+```
+
+Reload the extension in Chrome after source changes. Reload open Reddit pages too,
+so their content scripts use the updated code.
+
+Tests use simulated API responses and Reddit pages. They do not spend credits or
+post publicly. See [TECHNICAL.md](TECHNICAL.md) for architecture, failure handling,
+and the manual verification checklist.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
